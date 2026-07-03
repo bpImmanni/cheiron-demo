@@ -57,6 +57,12 @@
         <p class="text-xs text-slate-400 mb-6">Every claim links back to its trial. Deep verify uses a second AI
             provider as an independent judge.</p>
 
+        <!-- Recent briefs (from the database) -->
+        <div id="recentSection" class="hidden mb-6">
+            <p class="text-xs text-slate-400 mb-2">Recent briefs</p>
+            <div id="recentChips" class="flex flex-wrap gap-2"></div>
+        </div>
+
         <div id="error" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6"></div>
 
         <!-- STEP TRACKER -->
@@ -248,6 +254,7 @@
                 .join("");
 
             $("results").classList.remove("hidden");
+            loadRecent();
         }
 
         // --- Follow-up Q&A ------------------------------------------------------
@@ -323,6 +330,42 @@
         $("askBtn").addEventListener("click", ask);
         $("question").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
         $("downloadPdf").addEventListener("click", downloadPdf);
+
+        // --- Load recent briefs from the database ------------------------------
+        async function loadRecent() {
+            try {
+                const res = await fetch("/api/history");
+                const data = await res.json();
+                const briefs = data.briefs || [];
+                if (briefs.length === 0) return;   // nothing to show yet
+
+                // De-duplicate by query (show each unique term once).
+                const seen = new Set();
+                const unique = [];
+                for (const b of briefs) {
+                    if (!seen.has(b.query)) { seen.add(b.query); unique.push(b); }
+                }
+
+                $("recentChips").innerHTML = unique.slice(0, 8).map(b =>
+                    `<button class="recent-chip text-sm px-3 py-1 rounded-full border border-slate-300 text-slate-600 hover:bg-blue-50 hover:border-blue-300"
+                             data-query="${b.query.replace(/"/g, '&quot;')}">${b.query}</button>`
+                ).join("");
+                $("recentSection").classList.remove("hidden");
+
+                // Clicking a chip fills the search and generates it.
+                document.querySelectorAll(".recent-chip").forEach(chip => {
+                    chip.addEventListener("click", () => {
+                        $("query").value = chip.dataset.query;
+                        generate();
+                    });
+                });
+            } catch (e) {
+                // History is a bonus — if it fails, silently skip it.
+            }
+        }
+
+        // Load recent briefs when the page opens, and refresh after each new brief.
+        loadRecent();
     </script>
 </body>
 

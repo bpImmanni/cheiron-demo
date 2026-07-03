@@ -2,10 +2,9 @@
 main.py — THE BACKEND.
 Level 1 always runs (fast, free). Level 2 (Gemini) runs only when requested,
 to protect the free-tier quota. Serves the frontend + follow-up Q&A.
+Saves each brief to history (non-blocking — a DB hiccup never breaks the app).
 """
-from fastapi import Response
-from pdf_export import build_pdf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -14,6 +13,8 @@ from clinicaltrials import fetch_trials, TrialsFetchError
 from ai import answer_question
 from scoring import score_citations
 from pipeline import generate_verified_brief
+from pdf_export import build_pdf
+from database import save_brief, get_recent_briefs
 
 app = FastAPI(title="Cheiron Demo API")
 
@@ -28,6 +29,14 @@ class AskRequest(BaseModel):
     question: str
     trials: list[dict]
     history: list[dict]
+
+
+class PdfRequest(BaseModel):
+    query: str
+    brief_markdown: str
+    score: dict
+    sources: list[dict]
+    conversation: list[dict] = []   # the follow-up Q&A, sent from the browser
 
 
 @app.get("/api/health")
@@ -61,6 +70,13 @@ def create_brief(request: BriefRequest):
         for t in trials
     ]
 
+    # Save to history — NON-BLOCKING. If the DB is down, we log and move on;
+    # the user still gets their brief. Storage is a bonus, never a blocker.
+    try:
+        save_brief(query, result["brief_markdown"], result["score"])
+    except Exception as db_error:
+        print(f"[history] Could not save brief (non-fatal): {db_error}")
+
     return {
         "query": query,
         "brief_markdown": result["brief_markdown"],
@@ -76,6 +92,17 @@ def create_brief(request: BriefRequest):
     }
 
 
+@app.get("/api/history")
+def history():
+    """Return recent briefs. If the DB is unreachable, return an empty list
+    rather than erroring — history is a bonus feature, not critical."""
+    try:
+        return {"briefs": get_recent_briefs(limit=10)}
+    except Exception as db_error:
+        print(f"[history] Could not read history (non-fatal): {db_error}")
+        return {"briefs": []}
+
+
 @app.post("/api/ask")
 def ask_question(request: AskRequest):
     question = request.question.strip()
@@ -88,13 +115,6 @@ def ask_question(request: AskRequest):
     score = score_citations(answer, request.trials)
     return {"answer_markdown": answer, "score": score}
 
-class PdfRequest(BaseModel):
-    query: str
-    brief_markdown: str
-    score: dict
-    sources: list[dict]
-    conversation: list[dict] = []   # the follow-up Q&A, sent from the browser
-
 
 @app.post("/api/pdf")
 def download_pdf(request: PdfRequest):
@@ -105,13 +125,14 @@ def download_pdf(request: PdfRequest):
         sources=request.sources,
         conversation=request.conversation,
     )
-    # Return the raw PDF bytes with headers that tell the browser to download it.
     filename = f"clinical-brief-{request.query or 'session'}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 

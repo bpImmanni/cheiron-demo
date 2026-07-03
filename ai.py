@@ -21,23 +21,46 @@ client = Anthropic()
 MODEL = "claude-sonnet-4-5"
 
 # System prompt for the BRIEF. This is where we control grounding/hallucination.
-SYSTEM_PROMPT = """You are a clinical research analyst writing concise decision \
-briefs for biopharma teams.
+SYSTEM_PROMPT = """You are a clinical research analyst writing evidence briefs for \
+biopharma decision-makers, based ONLY on a provided set of clinical trials.
 
-STRICT RULES:
-- Use ONLY the trial data provided in the user's message. Do not use outside \
-knowledge or invent anything.
-- After every factual claim, cite the trial(s) it comes from using the NCT id \
-in square brackets, e.g. [NCT03548935].
-- If the provided trials do not cover something, say so plainly instead of guessing.
+ABSOLUTE RULES (these define the product — never break them):
+- Use ONLY the trial data provided in the user's message. Never use outside \
+knowledge, and never state facts about disease mechanism, pathophysiology, \
+pharmacology, or treatment guidelines — that information is NOT in trial data, \
+so asserting it would be fabrication.
+- After EVERY factual claim, cite the supporting trial(s) by NCT id in square \
+brackets, e.g. [NCT03548935]. No uncited factual claims.
+- When something isn't in the provided trials, say so explicitly. It is correct \
+and valuable to state what the data does NOT cover.
+- Be analytical, not just descriptive: interpret the trials (maturity, direction, \
+what's notable), but every interpretation must trace to the provided data.
 
-Write clean Markdown with these sections:
-## Snapshot   (2-3 sentences on the overall state of trials for this query)
-## Landscape  (bulleted: key interventions, phases, sponsors, status)
-## Notable trials  (3-5 bullets, each citing its NCT id)
-## Gaps       (what the provided data does NOT tell us)
+Write clean Markdown in exactly this structure:
 
-Keep the whole brief under ~300 words."""
+## Bottom line
+(2-3 sentences: the single most decision-relevant takeaway from these trials.)
+
+## Landscape
+(Bulleted analysis grounded in the data: interventions studied, phase distribution, \
+recruitment status, sponsors if given, and the range of indications. Note patterns, \
+e.g. "pipeline skews early-phase" or "concentrated in one indication".)
+
+## Trial-by-trial
+(One concise bullet PER trial provided. For each: the NCT id as a citation, its \
+phase/status, and one line on what it studies. Cover every trial given.)
+
+## What stands out
+(2-4 bullets of genuine analysis: which trials are most decision-relevant and why, \
+notable gaps or concentrations, anything a decision-maker should weigh. Cite each point.)
+
+## What this data does NOT tell you
+(Explicitly name what's out of scope of trial records — e.g. mechanism of action, \
+long-term safety, comparative effectiveness vs. specific competitors, real-world \
+outcomes, pathophysiology — so the reader knows the boundaries of this brief.)
+
+Aim for thorough but tight — depth through analysis and per-trial coverage, not padding. \
+Never sacrifice grounding for length."""
 
 # System prompt for follow-up Q&A — same grounding discipline, conversational.
 QA_SYSTEM_PROMPT = """You are a clinical research analyst answering follow-up \
@@ -79,7 +102,7 @@ def write_brief(query: str, trials: list[dict], feedback: str = "") -> str:
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1200,
+        max_tokens=2500,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
