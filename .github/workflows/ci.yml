@@ -1,0 +1,45 @@
+# GitHub Actions CI pipeline.
+# Runs automatically on every push and pull request to main.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Job 1: run our tests and confirm the code imports cleanly.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the test suite
+        run: pytest
+
+      - name: Confirm all modules import cleanly
+        # A quick sanity check that nothing is broken at import time.
+        # (We skip main/pipeline here since importing them constructs API
+        #  clients that need keys; the deterministic scorer test covers logic.)
+        run: |
+          python -c "import scoring, clinicaltrials"
+
+  # Job 2: confirm the Docker image still builds (catches Dockerfile breakage).
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Build the Docker image
+        run: docker build -t cheiron-demo .
