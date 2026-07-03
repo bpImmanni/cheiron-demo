@@ -1,0 +1,14 @@
+# Secrets — never commit
+.env
+
+# Python virtual environment — it's rebuilt from requirements, not committed
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Local database file (we'll create this later)
+*.db
+
+test_output.pdf

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cheiron — Clinical Decision Brief</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-in {
+            animation: fadeInUp 0.4s ease-out;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+    <div class="max-w-3xl mx-auto px-4 py-10">
+
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-blue-900">Clinical Decision Brief</h1>
+            <p class="text-slate-500 mt-2">Live evidence from ClinicalTrials.gov, grounded and citation-verified.</p>
+        </header>
+
+        <!-- Search -->
+        <div class="flex gap-2 mb-2">
+            <input id="query" type="text" placeholder="Enter a drug or condition, e.g. semaglutide"
+                class="flex-1 px-4 py-3 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none" />
+            <button id="generate"
+                class="px-6 py-3 rounded-lg bg-blue-700 text-white font-semibold hover:bg-blue-800 disabled:opacity-50">Generate</button>
+        </div>
+
+        <!-- Options -->
+        <div class="flex flex-wrap items-center gap-4 mb-2 text-sm">
+            <label class="flex items-center gap-2 text-slate-600">
+                <input type="checkbox" id="deepVerify" class="rounded" />
+                Deep verify (independent judge · Level 2)
+            </label>
+            <select id="demoFlaw" class="text-xs border border-slate-300 rounded px-2 py-1 text-slate-500">
+                <option value="">Demo: no flaw</option>
+                <option value="fake_id">Demo: inject fake citation (Level 1 catches)</option>
+                <option value="unsupported">Demo: inject false claim (Level 2 catches)</option>
+            </select>
+        </div>
+        <p class="text-xs text-slate-400 mb-6">Every claim links back to its trial. Deep verify uses a second AI
+            provider as an independent judge.</p>
+
+        <div id="error" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6"></div>
+
+        <!-- STEP TRACKER -->
+        <div id="steps" class="hidden bg-white rounded-xl border border-slate-200 p-5 mb-6 space-y-1"></div>
+
+        <!-- RESULTS -->
+        <div id="results" class="hidden">
+            <div id="badge"
+                class="fade-in flex items-center gap-3 bg-white rounded-xl border border-slate-200 p-4 mb-4">
+                <div id="badgeCircle"
+                    class="w-14 h-14 rounded-full flex items-center justify-center text-white font-bold text-lg">–</div>
+                <div>
+                    <div class="font-semibold text-slate-800">Citation Accuracy</div>
+                    <div id="badgeDetail" class="text-sm text-slate-500"></div>
+                </div>
+            </div>
+
+            <div id="statusBanner" class="hidden fade-in rounded-xl border p-3 mb-4 text-sm"></div>
+
+            <!-- Brief + PDF download -->
+            <div class="fade-in bg-white rounded-xl border border-slate-200 p-6 mb-4">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-semibold text-slate-700">Brief</h3>
+                    <button id="downloadPdf"
+                        class="text-sm px-3 py-1.5 rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+                        ↓ Download PDF (full session)
+                    </button>
+                </div>
+                <div id="brief" class="prose prose-slate max-w-none"></div>
+            </div>
+
+            <!-- Verification details -->
+            <div class="fade-in bg-white rounded-xl border border-slate-200 p-5 mb-4">
+                <h3 class="font-semibold text-slate-700 mb-2">Verification details</h3>
+                <div id="scoreDetails" class="text-sm text-slate-600 space-y-1"></div>
+            </div>
+
+            <!-- Sources -->
+            <div class="fade-in bg-white rounded-xl border border-slate-200 p-5">
+                <h3 class="font-semibold text-slate-700 mb-2">Sources</h3>
+                <div id="sources" class="space-y-1"></div>
+            </div>
+
+            <!-- Follow-up Q&A -->
+            <div class="fade-in bg-white rounded-xl border border-slate-200 p-5 mt-4">
+                <h3 class="font-semibold text-slate-700 mb-3">Ask a follow-up</h3>
+                <div id="chatThread" class="space-y-3 mb-3"></div>
+                <div class="flex gap-2">
+                    <input id="question" type="text" placeholder="e.g. Which trials are closest to market?"
+                        class="flex-1 px-3 py-2 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none text-sm" />
+                    <button id="askBtn"
+                        class="px-4 py-2 rounded-lg bg-blue-700 text-white font-medium text-sm hover:bg-blue-800 disabled:opacity-50">Ask</button>
+                </div>
+                <p class="text-xs text-slate-400 mt-2">Answers stay grounded in the trials above and remember the
+                    conversation.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+        // Session state held in the browser.
+        let currentTrials = [];
+        let chatHistory = [];
+        let currentData = null;
+
+        // --- Step tracker -------------------------------------------------------
+        function stepRow(label, state) {
+            const spin = "w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin flex-shrink-0";
+            const done = "w-5 h-5 rounded-full bg-green-500 flex items-center justify-center text-white text-xs flex-shrink-0";
+            const warn = "w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center text-white text-xs flex-shrink-0";
+            const idle = "w-5 h-5 rounded-full border-2 border-slate-300 flex-shrink-0";
+            const icon = state === "active" ? spin : state === "done" ? done : state === "warn" ? warn : idle;
+            const mark = state === "done" ? "✓" : state === "warn" ? "!" : "";
+            const color = state === "active" ? "text-blue-700 font-medium" : state === "idle" ? "text-slate-400" : "text-slate-700";
+            return `<div class="flex items-center gap-3 py-1.5"><span class="${icon}">${mark}</span><span class="${color}">${label}</span></div>`;
+        }
+        function setSteps(rows) { $("steps").innerHTML = rows.map(r => stepRow(r.label, r.state)).join(""); }
+
+        // --- Generate a brief ---------------------------------------------------
+        async function generate() {
+            const query = $("query").value.trim();
+            if (!query) return;
+            const deep = $("deepVerify").checked;
+            const demoFlaw = $("demoFlaw").value;
+
+            $("error").classList.add("hidden");
+            $("results").classList.add("hidden");
+            $("steps").classList.remove("hidden");
+            $("generate").disabled = true;
+
+            setSteps([
+                { label: "Fetching live clinical trials", state: "active" },
+                { label: "Writing evidence-grounded brief", state: "idle" },
+                { label: "Verifying citations (Level 1)", state: "idle" },
+                ...(deep ? [{ label: "Independent judge (Level 2)", state: "idle" }] : []),
+            ]);
+            await sleep(500);
+
+            try {
+                setSteps([
+                    { label: "Fetched live clinical trials", state: "done" },
+                    { label: "Writing evidence-grounded brief · verifying (may retry)", state: "active" },
+                    ...(deep ? [{ label: "Independent judge (Level 2)", state: "idle" }] : []),
+                ]);
+
+                const res = await fetch("/api/brief", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query, run_level2: deep, demo_flaw: demoFlaw }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "Something went wrong.");
+                }
+                const data = await res.json();
+
+                const finalSteps = [
+                    { label: "Fetched live clinical trials", state: "done" },
+                    { label: "Wrote evidence-grounded brief", state: "done" },
+                ];
+                data.retry_log.forEach(r => {
+                    finalSteps.push({ label: `Caught by ${r.step}: ${r.reason} → retried`, state: "warn" });
+                });
+                finalSteps.push({
+                    label: `Citations verified (Level 1) — ${data.score.valid_ids.length} valid, ${data.score.invalid_ids.length} fabricated`,
+                    state: data.score.invalid_ids.length ? "warn" : "done"
+                });
+                if (deep) {
+                    const s = data.level2_status;
+                    finalSteps.push({
+                        label: s === "passed" ? "Independent judge (Level 2) — all claims supported ✓"
+                            : s === "unavailable" ? "Independent judge (Level 2) — unavailable, not verified"
+                                : "Independent judge (Level 2) — flagged unsupported claims",
+                        state: s === "passed" ? "done" : "warn"
+                    });
+                }
+                setSteps(finalSteps);
+                await sleep(400);
+                render(data);
+            } catch (e) {
+                $("steps").classList.add("hidden");
+                $("error").textContent = e.message;
+                $("error").classList.remove("hidden");
+            } finally {
+                $("generate").disabled = false;
+            }
+        }
+
+        // --- Render results -----------------------------------------------------
+        function render(data) {
+            currentData = data;
+            currentTrials = data.trials || [];
+            chatHistory = [];
+            $("chatThread").innerHTML = "";
+
+            const pct = data.score.accuracy_percent;
+            const circle = $("badgeCircle");
+            circle.textContent = pct + "%";
+            circle.className = "w-14 h-14 rounded-full flex items-center justify-center text-white font-bold text-lg " +
+                (pct === 100 ? "bg-green-500" : pct >= 50 ? "bg-amber-500" : "bg-red-500");
+            $("badgeDetail").textContent =
+                `${data.score.valid_ids.length} of ${data.score.total_citations} citations verified real · ${data.score.points} pts · ${data.attempts} attempt(s)`;
+
+            const banner = $("statusBanner");
+            if (data.note) {
+                banner.textContent = data.note;
+                banner.className = "fade-in rounded-xl border p-3 mb-4 text-sm " +
+                    (data.passed ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-red-50 border-red-200 text-red-800");
+                banner.classList.remove("hidden");
+            } else {
+                banner.classList.add("hidden");
+            }
+
+            $("brief").innerHTML = marked.parse(data.brief_markdown || "");
+
+            $("scoreDetails").innerHTML = `
+                <div>Valid citations: <span class="font-mono text-green-700">${data.score.valid_ids.join(", ") || "none"}</span></div>
+                <div>Fabricated citations: <span class="font-mono text-red-700">${data.score.invalid_ids.join(", ") || "none — all real ✓"}</span></div>
+                <div>Weighted score: <span class="font-mono">${data.score.points}</span> (valid +1, fabricated −5)</div>
+                <div>Level 2 (independent judge): <span class="font-mono">${data.level2_status}</span></div>
+            `;
+
+            $("sources").innerHTML = (data.sources || [])
+                .filter(s => s.nct_id)
+                .map(s => `<a href="${s.url}" target="_blank" class="block text-blue-700 hover:underline text-sm">${s.nct_id} — ${s.title}</a>`)
+                .join("");
+
+            $("results").classList.remove("hidden");
+        }
+
+        // --- Follow-up Q&A ------------------------------------------------------
+        let bubbleCount = 0;
+        function addChatBubble(role, text) {
+            const id = "bubble-" + (bubbleCount++);
+            const isUser = role === "user";
+            const wrapper = document.createElement("div");
+            wrapper.className = isUser ? "text-right" : "text-left";
+            wrapper.innerHTML = `<div id="${id}" class="inline-block max-w-[85%] px-3 py-2 rounded-lg text-sm ${isUser ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-800 prose prose-sm max-w-none"}">${text}</div>`;
+            $("chatThread").appendChild(wrapper);
+            return id;
+        }
+        async function ask() {
+            const question = $("question").value.trim();
+            if (!question || currentTrials.length === 0) return;
+            $("askBtn").disabled = true;
+            $("question").value = "";
+            addChatBubble("user", question);
+            const thinkingId = addChatBubble("assistant", "…");
+            try {
+                const res = await fetch("/api/ask", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question, trials: currentTrials, history: chatHistory }),
+                });
+                if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || "Error"); }
+                const data = await res.json();
+                document.getElementById(thinkingId).innerHTML = marked.parse(data.answer_markdown);
+                chatHistory.push({ role: "user", content: question });
+                chatHistory.push({ role: "assistant", content: data.answer_markdown });
+            } catch (e) {
+                document.getElementById(thinkingId).innerHTML = `<span class="text-red-600">${e.message}</span>`;
+            } finally { $("askBtn").disabled = false; }
+        }
+
+        // --- Download the full session as a PDF ---------------------------------
+        async function downloadPdf() {
+            if (!currentData) return;
+            const btn = $("downloadPdf");
+            btn.disabled = true;
+            btn.textContent = "Generating…";
+            try {
+                const res = await fetch("/api/pdf", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        query: currentData.query,
+                        brief_markdown: currentData.brief_markdown,
+                        score: currentData.score,
+                        sources: currentData.sources,
+                        conversation: chatHistory,
+                    }),
+                });
+                if (!res.ok) throw new Error("Could not generate PDF.");
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `clinical-brief-${currentData.query || "session"}.pdf`;
+                a.click();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                alert(e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "↓ Download PDF (full session)";
+            }
+        }
+
+        // --- Wire up ------------------------------------------------------------
+        $("generate").addEventListener("click", generate);
+        $("query").addEventListener("keydown", e => { if (e.key === "Enter") generate(); });
+        $("askBtn").addEventListener("click", ask);
+        $("question").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+        $("downloadPdf").addEventListener("click", downloadPdf);
+    </script>
+</body>
+
+</html>
